@@ -1,0 +1,7 @@
+= Sample App
+
+----
+$ make up
+host側のターミナルから
+$ make curl
+----

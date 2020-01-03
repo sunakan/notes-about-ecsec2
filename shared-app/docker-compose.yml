@@ -1,0 +1,16 @@
+---
+version: "3.7"
+
+services:
+  app:
+    container_name: sunatra
+    image: sunatra
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RUBY_VERSION_TAG: ${RUBY_VERSION_TAG}
+    volumes:
+      - ./:/app
+    ports:
+      - 4567:4567
