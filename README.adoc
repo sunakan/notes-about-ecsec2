@@ -1,0 +1,3 @@
+= ECS + Terraform
+
+* 【データプレーン】EC2とFargateとのパラメータの違いが知りたい
