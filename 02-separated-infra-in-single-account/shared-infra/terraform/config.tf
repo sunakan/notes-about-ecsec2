@@ -1,5 +1,19 @@
+################################################################################
+# terraform init する前にS3バケットが必要
+#   - 最初はコメントアウトしてlocalで色々実行して、コメントインしてもう一回initしてyes押してもよい
+#   - profileがvarより先に展開されてしまうのでベタ打ち
+#     - $ terraform init -backend-config="profile=${aws_profile}"
+#     - とかでもいいかもしれない
+################################################################################
 terraform {
   required_version = "0.12.18"
+  backend "s3" {
+    bucket  = "foobar-shared-infra"
+    region  = "ap-northeast-1"
+    key     = "02-separated-infra-in-single-account/terraform.tfstate"
+    encrypt = true
+    profile = "sunabako-terraform-role"
+  }
 }
 
 provider "aws" {
