@@ -1,0 +1,18 @@
+---
+
+version: "3.7"
+
+services:
+  app:
+    container_name: sunatra
+    image: sunatra:latest
+  nginx-sidecar:
+    container_name: nginx-sidecar
+    image: nginx-sidecar:latest
+    ports:
+      - 80:80
+    environment:
+      NGINX_PORT: 80
+      NGINX_LOCATION: hogehoge
+      APP_HOST: app
+      APP_PORT: 4567

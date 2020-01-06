@@ -4,6 +4,8 @@ build: .env
 	docker-compose build
 up: .env
 	docker-compose up
+down:
+	docker-compose down
 bash: .env
 	docker-compose run --rm --service-ports app bash
 curl:
