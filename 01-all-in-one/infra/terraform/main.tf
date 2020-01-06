@@ -125,137 +125,6 @@ resource "aws_lb" "this" {
   ]
 }
 
-#################################################################################
-## セキュリティグループ
-#################################################################################
-#resource "aws_security_group" "web_sg" {
-#  name        = "web-sg"
-#  description = "security group for web"
-#  vpc_id      = aws_vpc.this.id
-#  ingress {
-#    from_port = 80
-#    to_port   = 80
-#    protocol  = "tcp"
-#    cidr_blocks = [
-#      "0.0.0.0/0",
-#    ]
-#  }
-#  ingress {
-#    from_port = 22
-#    to_port   = 22
-#    protocol  = "tcp"
-#    cidr_blocks = [
-#      "114.164.85.177/32",
-#    ]
-#  }
-#  ingress {
-#    from_port = 4567
-#    to_port   = 4567
-#    protocol  = "tcp"
-#    cidr_blocks = [
-#      "0.0.0.0/0",
-#    ]
-#  }
-#  ingress {
-#    from_port   = -1
-#    to_port     = -1
-#    protocol    = "icmp"
-#    cidr_blocks = ["0.0.0.0/0"]
-#  }
-#  egress {
-#    from_port   = 0
-#    to_port     = 0
-#    protocol    = "-1"
-#    cidr_blocks = ["0.0.0.0/0"]
-#  }
-#  tags = {
-#    Name = "sg for web"
-#  }
-#}
-#################################################################################
-## ネットワークインターフェース
-#################################################################################
-#resource "aws_network_interface" "ni_1" {
-#  subnet_id   = aws_subnet.public_1.id
-#  private_ips = ["10.0.0.10"]
-#  tags = {
-#    Name = "ネットワークインターフェース-1"
-#  }
-#  security_groups = [
-#    aws_security_group.web_sg.id,
-#  ]
-#}
-#resource "aws_network_interface" "ni_2" {
-#  subnet_id   = aws_subnet.public_2.id
-#  private_ips = ["10.0.16.10"]
-#  tags = {
-#    Name = "ネットワークインターフェース-2"
-#  }
-#  security_groups = [
-#    aws_security_group.web_sg.id,
-#  ]
-#}
-#################################################################################
-## キーペア
-#################################################################################
-#resource "aws_key_pair" "this" {
-#  key_name   = "hogehoge-pubkey"
-#  public_key = file("./hogehoge.pub")
-#}
-#################################################################################
-## UbuntuのEC2インスタンス
-#################################################################################
-#data "aws_ami" "ubuntu_18_04" {
-#  most_recent = true
-#  owners = ["099720109477"]
-#  filter {
-#    name   = "name"
-#    values = ["ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*"]
-#  }
-#}
-#resource "aws_instance" "instance_1" {
-#  ami           = data.aws_ami.ubuntu_18_04.id
-#  instance_type = "t2.micro"
-#  tenancy       = "default"
-#  key_name      = aws_key_pair.this.id
-#  user_data     = <<-EOF
-#    #!/bin/bash
-#    echo "ECS_CLUSTER=suna-cluster" >> /etc/ecs/ecs.config
-#  EOF
-#  root_block_device {
-#    volume_type = "gp2"
-#    volume_size = 8
-#  }
-#  network_interface {
-#    network_interface_id = aws_network_interface.ni_1.id
-#    device_index         = 0
-#  }
-#  tags = {
-#    Name = "instance-1"
-#  }
-#}
-#resource "aws_instance" "instance_2" {
-#  ami           = data.aws_ami.ubuntu_18_04.id
-#  instance_type = "t2.micro"
-#  tenancy       = "default"
-#  key_name      = aws_key_pair.this.id
-#  user_data     = <<-EOF
-#    #!/bin/bash
-#    echo "ECS_CLUSTER=suna-cluster" >> /etc/ecs/ecs.config
-#  EOF
-#  root_block_device {
-#    volume_type = "gp2"
-#    volume_size = 8
-#  }
-#  network_interface {
-#    network_interface_id = aws_network_interface.ni_2.id
-#    device_index         = 0
-#  }
-#  tags = {
-#    Name = "instance-2"
-#  }
-#}
-
 ################################################################################
 # ロギング用CloudWatchのグループを作成
 ################################################################################
@@ -336,8 +205,6 @@ resource "aws_lb_listener" "this" {
 ################################################################################
 # リスナールール（ALBのリスナーとターゲットグループを結ぶ）
 #   - 外部情報(remote_state)としてALBのリスナーのarnが必須
-#   - ALBが外部情報となっている理由
-#     - アプリ毎にALBを立てるとお金がかかるから
 ################################################################################
 resource "aws_lb_listener_rule" "this" {
   listener_arn = aws_lb_listener.this.arn
@@ -347,7 +214,7 @@ resource "aws_lb_listener_rule" "this" {
   }
   condition {
     path_pattern {
-      values = ["/*"]
+      values = ["/hogehoge/*"]
     }
   }
 }
