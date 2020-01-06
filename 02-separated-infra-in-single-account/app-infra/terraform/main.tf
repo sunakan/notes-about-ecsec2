@@ -40,7 +40,7 @@ resource "aws_ecs_task_definition" "this" {
   cpu                      = "256"
   memory                   = "512"
   network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
+  requires_compatibilities = ["EC2"]
   container_definitions = jsonencode(yamldecode(templatefile(
     "./container_definitions.yml.tpl",
     {
@@ -75,9 +75,8 @@ resource "aws_lb_target_group" "this" {
 
 ################################################################################
 # リスナールール（ALBのリスナーとターゲットグループを結ぶ）
-#   - 外部情報(remote_state)としてALBのリスナーのarnが必須
-#   - ALBが外部情報となっている理由
-#     - アプリ毎にALBを立てるとお金がかかるから
+# - 注意:もしターゲットグループを一度destroy/create(=replace)する時
+#   - こいつが原因で失敗する
 ################################################################################
 resource "aws_lb_listener_rule" "this" {
   listener_arn = data.terraform_remote_state.shared_infra.outputs.lb_listener_arn
@@ -130,11 +129,10 @@ resource "aws_ecs_service" "this" {
   cluster                           = aws_ecs_cluster.this.id
   task_definition                   = aws_ecs_task_definition.this.arn
   desired_count                     = 1
-  launch_type                       = "FARGATE"
-  platform_version                  = "1.3.0"
+  launch_type                       = "EC2"
   health_check_grace_period_seconds = 60
   network_configuration {
-    assign_public_ip = true
+    assign_public_ip = false
     security_groups = [
       aws_security_group.ecs_service_sg.id,
     ]
@@ -194,5 +192,184 @@ resource "aws_ecr_repository" "this" {
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration {
     scan_on_push = true
+  }
+}
+
+################################################################################
+# EC2用のIAM roleとinstance profile
+################################################################################
+data "aws_iam_policy_document" "ec2_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+resource "aws_iam_role" "ecs_ec2_instance_role" {
+  name               = "suna-ecs-ec2-instance-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
+}
+data "aws_iam_policy_document" "ecs_ec2_instance_policy" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "ecs:CreateCluster",
+      "ecs:DeregisterContainerInstance",
+      "ecs:DiscoverPollEndpoint",
+      "ecs:Poll",
+      "ecs:RegisterContainerInstance",
+      "ecs:StartTelemetrySession",
+      "ecs:UpdateContainerInstancesState",
+      "ecs:Submit*",
+      "ecr:GetAuthorizationToken",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["*"]
+  }
+}
+resource "aws_iam_policy" "ecs_ec2_instance_policy" {
+  name        = "ecs_ec2_instance_policy"
+  path        = "/"
+  description = "ECS(EC2) instance policy"
+  policy      = data.aws_iam_policy_document.ecs_ec2_instance_policy.json
+}
+resource "aws_iam_role_policy_attachment" "attach_ecs_ec2_instance_policy_to_role" {
+  role       = aws_iam_role.ecs_ec2_instance_role.name
+  policy_arn = aws_iam_policy.ecs_ec2_instance_policy.arn
+}
+resource "aws_iam_instance_profile" "ec2_instance_profile" {
+  name = "ec2-instance-profile"
+  role = aws_iam_role.ecs_ec2_instance_role.name
+}
+
+################################################################################
+# EC2用のセキュリティグループ
+################################################################################
+resource "aws_security_group" "web_sg" {
+  name        = "web-sg"
+  description = "security group for web"
+  vpc_id      = data.terraform_remote_state.shared_infra.outputs.vpc_id
+  ingress {
+    from_port = 80
+    to_port   = 80
+    protocol  = "tcp"
+    cidr_blocks = [
+      "0.0.0.0/0",
+    ]
+  }
+  ingress {
+    from_port = 4567
+    to_port   = 4567
+    protocol  = "tcp"
+    cidr_blocks = [
+      "0.0.0.0/0",
+    ]
+  }
+  ingress {
+    from_port   = -1
+    to_port     = -1
+    protocol    = "icmp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "sg for web"
+  }
+}
+################################################################################
+# EC2用のネットワークインターフェース
+################################################################################
+resource "aws_network_interface" "ni_1" {
+  subnet_id = data.terraform_remote_state.shared_infra.outputs.public_subnet_ids[0]
+  tags = {
+    Name = "ネットワークインターフェース-1"
+  }
+  security_groups = [
+    aws_security_group.web_sg.id,
+  ]
+}
+resource "aws_network_interface" "ni_2" {
+  subnet_id = data.terraform_remote_state.shared_infra.outputs.public_subnet_ids[1]
+  tags = {
+    Name = "ネットワークインターフェース-2"
+  }
+  security_groups = [
+    aws_security_group.web_sg.id,
+  ]
+}
+################################################################################
+# EC2インスタンス
+################################################################################
+locals {
+  # Amazon ECS-Optimized Amazon Linux 2
+  ami_owner       = "amazon"
+  ami_name_filter = "amzn2-ami-ecs-hvm-*-x86_64-ebs"
+  # Amazon Linux 2
+  #ami_owner       = "amazon"
+  #ami_name_filter = "amzn-ami-hvm-*-x86_64-gp2"
+  # Ubuntu 18.04
+  #ami_owner        = "099720109477"
+  #ami_name_filter  = "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*"
+}
+data "aws_ami" "image" {
+  most_recent = true
+  owners      = [local.ami_owner]
+  filter {
+    name   = "name"
+    values = [local.ami_name_filter]
+  }
+}
+resource "aws_instance" "instance_1" {
+  ami                  = data.aws_ami.image.id
+  instance_type        = "t2.small"
+  tenancy              = "default"
+  iam_instance_profile = aws_iam_instance_profile.ec2_instance_profile.name
+  user_data            = templatefile(
+    "./user_data.sh.tpl",
+    { cluseter_name = aws_ecs_cluster.this.name }
+  )
+  root_block_device {
+    volume_type = "gp2"
+    volume_size = 30
+  }
+  network_interface {
+    network_interface_id = aws_network_interface.ni_1.id
+    device_index         = 0
+  }
+  tags = {
+    Name = "instance-1"
+  }
+}
+resource "aws_instance" "instance_2" {
+  ami                  = data.aws_ami.image.id
+  instance_type        = "t2.small"
+  tenancy              = "default"
+  iam_instance_profile = aws_iam_instance_profile.ec2_instance_profile.name
+  user_data            = templatefile(
+    "./user_data.sh.tpl",
+    { cluseter_name = aws_ecs_cluster.this.name }
+  )
+  root_block_device {
+    volume_type = "gp2"
+    volume_size = 30
+  }
+  network_interface {
+    network_interface_id = aws_network_interface.ni_2.id
+    device_index         = 0
+  }
+  tags = {
+    Name = "instance-2"
   }
 }

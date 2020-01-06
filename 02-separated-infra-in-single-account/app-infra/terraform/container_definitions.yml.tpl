@@ -17,6 +17,7 @@
   portMappings:
     -
       protocol: tcp
+      hostPort: ${port}
       containerPort: ${port}
   logConfiguration:
     logDriver: awslogs
