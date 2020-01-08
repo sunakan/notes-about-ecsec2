@@ -1,6 +1,8 @@
 locals {
-  port         = 4567
+  app_port     = 4567
+  nginx_port   = 80
   awslog_group = "/ecs/suna-cluster/sunatra"
+  environment  = "production"
 }
 ################################################################################
 # 共有tfstateからoutputsを取得
@@ -31,25 +33,97 @@ resource "aws_cloudwatch_log_group" "this" {
 resource "aws_ecs_cluster" "this" {
   name = "suna-cluster"
 }
+
+################################################################################
+# コンテナ定義モジュール
+################################################################################
+module "app_container_definition" {
+  source          = "cloudposse/ecs-container-definition/aws"
+  version         = "0.21.0"
+  container_image = "${aws_ecr_repository.app.repository_url}:${local.environment}"
+  container_name  = "suna-app"
+  environment = [
+    {
+      name  = "ENV"
+      value = local.environment
+    },
+  ]
+  log_configuration = {
+    logDriver = "awslogs",
+    options = {
+      awslogs-group         = local.awslog_group,
+      awslogs-region        = "ap-northeast-1",
+      awslogs-stream-prefix = "hogesuna",
+    },
+    secretOptions = [],
+  }
+  secrets = [
+    {
+      name  = "SECRET"
+      valueFrom = "BARETARAYABAI"
+    },
+  ]
+  port_mappings = [
+    {
+      hostPort      = local.app_port,
+      containerPort = local.app_port,
+      protocol      = "tcp",
+    },
+  ]
+}
+module "nginx_container_definition" {
+  source          = "cloudposse/ecs-container-definition/aws"
+  version         = "0.21.0"
+  container_image = "${aws_ecr_repository.nginx_sidecar.repository_url}:${local.environment}"
+  container_name  = "nginx-sidecar"
+  environment = [
+    {
+      name  = "NGINX_PORT"
+      value = local.nginx_port
+    },
+    {
+      name  = "NGINX_LOCATION"
+      value = "aabbcc"
+    },
+    {
+      name  = "APP_HOST"
+      value = "127.0.0.1"
+    },
+    {
+      name  = "APP_PORT"
+      value = local.app_port
+    },
+  ]
+  log_configuration = {
+    logDriver = "awslogs",
+    options = {
+      awslogs-group         = local.awslog_group,
+      awslogs-region        = "ap-northeast-1",
+      awslogs-stream-prefix = "hogesuna",
+    },
+    secretOptions = [],
+  }
+  port_mappings = [
+    {
+      hostPort      = local.nginx_port,
+      containerPort = local.nginx_port,
+      protocol      = "tcp",
+    },
+  ]
+  secrets = []
+}
+
 ################################################################################
 # タスク定義（サービスで利用される）
-# - タスクで実行するコンテナ定義は別ファイルで定義
 ################################################################################
 resource "aws_ecs_task_definition" "this" {
   family                   = "suna-task"
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = "1024"
+  memory                   = "1024"
   network_mode             = "awsvpc"
   requires_compatibilities = ["EC2"]
-  container_definitions = jsonencode(yamldecode(templatefile(
-    "./container_definitions.yml.tpl",
-    {
-      image        = "${aws_ecr_repository.this.repository_url}:production",
-      port         = local.port,
-      awslog_group = local.awslog_group,
-    }
-  )))
-  execution_role_arn = aws_iam_role.ecs_task_execution.arn
+  container_definitions    = "[${module.app_container_definition.json_map}, ${module.nginx_container_definition.json_map}]"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
 }
 ################################################################################
 # ターゲットグループ（後々ECSサービスとつながる）
@@ -58,7 +132,7 @@ resource "aws_lb_target_group" "this" {
   name                 = "suna-tg"
   target_type          = "ip"
   vpc_id               = data.terraform_remote_state.shared_infra.outputs.vpc_id
-  port                 = local.port
+  port                 = local.nginx_port
   protocol             = "HTTP"
   deregistration_delay = 300
   health_check {
@@ -86,7 +160,7 @@ resource "aws_lb_listener_rule" "this" {
   }
   condition {
     path_pattern {
-      values = ["/*"]
+      values = ["/aabbcc/*"]
     }
   }
 }
@@ -128,7 +202,7 @@ resource "aws_ecs_service" "this" {
   name                              = "sunatra"
   cluster                           = aws_ecs_cluster.this.id
   task_definition                   = aws_ecs_task_definition.this.arn
-  desired_count                     = 1
+  desired_count                     = 2
   launch_type                       = "EC2"
   health_check_grace_period_seconds = 60
   network_configuration {
@@ -140,8 +214,8 @@ resource "aws_ecs_service" "this" {
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.this.arn
-    container_name   = "suna-app"
-    container_port   = local.port
+    container_name   = "nginx-sidecar"
+    container_port   = local.nginx_port
   }
   lifecycle {
     ignore_changes = [task_definition]
@@ -187,8 +261,15 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
 ################################################################################
 # ECR
 ################################################################################
-resource "aws_ecr_repository" "this" {
+resource "aws_ecr_repository" "app" {
   name                 = "sunatra"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+resource "aws_ecr_repository" "nginx_sidecar" {
+  name                 = "nginx-sidecar"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration {
     scan_on_push = true
@@ -331,12 +412,17 @@ data "aws_ami" "image" {
     values = [local.ami_name_filter]
   }
 }
+#resource "aws_key_pair" "auth" {
+#  key_name   = "hogehoge-pubkey"
+#  public_key = file("./hogehoge.pub")
+#}
 resource "aws_instance" "instance_1" {
   ami                  = data.aws_ami.image.id
   instance_type        = "t2.small"
   tenancy              = "default"
   iam_instance_profile = aws_iam_instance_profile.ec2_instance_profile.name
-  user_data            = templatefile(
+  #key_name      = aws_key_pair.auth.id
+  user_data = templatefile(
     "./user_data.sh.tpl",
     { cluseter_name = aws_ecs_cluster.this.name }
   )
@@ -357,7 +443,7 @@ resource "aws_instance" "instance_2" {
   instance_type        = "t2.small"
   tenancy              = "default"
   iam_instance_profile = aws_iam_instance_profile.ec2_instance_profile.name
-  user_data            = templatefile(
+  user_data = templatefile(
     "./user_data.sh.tpl",
     { cluseter_name = aws_ecs_cluster.this.name }
   )
